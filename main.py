@@ -16,7 +16,7 @@ import wandb
 wandb.init(project="tweet-popularity-prediction", entity="your_wandb_username", config={
     "learning_rate": 0.001,
     "architecture": "LSTM",
-    "dataset": "Your Dataset Name",
+    "dataset": "dataset.csv",
     "epochs": 10,
     "vocab_size": 5000,
     "embedding_dim": 100,
@@ -71,7 +71,7 @@ class TweetPopularityModel(pl.LightningModule):
 
 
 if __name__ == "__main__":
-    df = pd.read_csv('/path/to/your/dataset.csv')
+    df = pd.read_csv('dataset.csv')
     df['Content'] = df['Content'].apply(preprocess_text)
 
     X_train, X_val, y_train, y_val = train_test_split(df['Content'], df['Popularity_Score'], test_size=0.2,
@@ -92,17 +92,16 @@ if __name__ == "__main__":
     model = TweetPopularityModel(config.vocab_size, config.embedding_dim, config.hidden_dim,
                                  learning_rate=config.learning_rate)
 
-    # Use WandbLogger
+
     wandb_logger = WandbLogger(project="tweet-popularity-prediction", entity="your_wandb_username", log_model="all")
 
     trainer = pl.Trainer(
         max_epochs=config.epochs,
         gpus=-1,
         callbacks=[ModelCheckpoint(monitor='val_loss')],
-        logger=wandb_logger  # Use the WandbLogger
+        logger=wandb_logger
     )
 
     trainer.fit(model, train_loader, val_loader)
 
-    # Optionally, you can save the final model checkpoint to wandb as an artifact
     wandb_logger.experiment.finish()
