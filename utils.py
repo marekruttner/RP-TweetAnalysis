@@ -1,19 +1,19 @@
 import torch
 from sklearn.metrics import mean_squared_error, mean_absolute_error
-
 import re
 import nltk
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
+from collections import Counter
 
 # Download necessary NLTK datasets (only needs to be done once)
 nltk.download('stopwords')
 nltk.download('wordnet')
 nltk.download('omw-1.4')
 
-# Initialize the WordNet lemmatizer
+# Initialize the WordNet Lemmatizer and load stopwords
 lemmatizer = WordNetLemmatizer()
-
+stop_words = set(stopwords.words('english'))
 
 def preprocess_text(text):
     """
@@ -24,7 +24,7 @@ def preprocess_text(text):
     - text (str): The text to be cleaned and processed.
 
     Returns:
-    - str: The processed text.
+    - list[str]: The processed text as a list of words (tokens).
     """
     # Remove URLs
     text = re.sub(r'https?://\S+|www\.\S+', '', text)
@@ -39,65 +39,40 @@ def preprocess_text(text):
     # Remove extra spaces
     text = re.sub(r'\s+', ' ', text).strip()
 
-    # Tokenize the text
+    # Tokenize the text into words
     words = text.split()
 
-    # Remove stopwords
-    words = [word for word in words if word not in stopwords.words('english')]
+    # Remove stopwords and lemmatize each word
+    processed_words = [lemmatizer.lemmatize(word) for word in words if word not in stop_words]
 
-    # Lemmatize each word
-    lemmatized_words = [lemmatizer.lemmatize(word) for word in words]
+    return processed_words
+  # Return list of words (tokens) instead of a string
 
-    # Reconstruct the text from processed words
-    processed_text = ' '.join(lemmatized_words)
+class Vocabulary:
+    """A simple vocabulary class to map tokens to numerical ids."""
+    def __init__(self, max_size=None):
+        self.token_to_id = {"<PAD>": 0, "<UNK>": 1}
+        self.max_size = max_size
 
-    return processed_text
+    def build_vocab(self, sentences):
+        token_freqs = Counter(token for sent in sentences for token in sent)
+        most_common = token_freqs.most_common(self.max_size)
+        for idx, (token, _) in enumerate(most_common, start=len(self.token_to_id)):
+            self.token_to_id[token] = idx
 
+    def numericalize(self, text):
+        return [self.token_to_id.get(token, self.token_to_id["<UNK>"]) for token in text]
 
-def compute_metrics(y_true, y_pred):
-    """
-    Calculates and returns regression metrics between the true and predicted values.
+def pad_sequences(sequences, max_length):
+    """Pads or truncates a list of sequences to a fixed length."""
+    padded_sequences = torch.zeros((len(sequences), max_length), dtype=torch.long)
+    for i, seq in enumerate(sequences):
+        length = min(len(seq), max_length)
+        padded_sequences[i, :length] = torch.tensor(seq[:max_length], dtype=torch.long)
+    return padded_sequences
 
-    Parameters:
-    - y_true (array-like): The ground truth target values.
-    - y_pred (array-like): The predicted values from the model.
-
-    Returns:
-    - dict: A dictionary containing the MSE, RMSE, and MAE.
-    """
-    mse = mean_squared_error(y_true, y_pred)
-    rmse = torch.sqrt(torch.tensor(mse))
-    mae = mean_absolute_error(y_true, y_pred)
-    return {'MSE': mse, 'RMSE': rmse, 'MAE': mae}
-
-def tokenize_and_pad(text_list, tokenizer, max_length):
-    """
-    Tokenizes and pads/truncates the list of text to a specified max length.
-
-    Parameters:
-    - text_list (list of str): The list of texts to be tokenized and padded.
-    - tokenizer: The tokenizer to be used, should have a tokenize method.
-    - max_length (int): The maximum length of the tokenized output.
-
-    Returns:
-    - torch.Tensor: A tensor of tokenized and padded indices.
-    """
-    tokenized_texts = [tokenizer.tokenize(text) for text in text_list]
-    padded_tokens = torch.tensor([pad_or_truncate(tokens, max_length) for tokens in tokenized_texts])
-    return padded_tokens
-
-def pad_or_truncate(tokens, max_length):
-    """
-    Pads or truncates a list of token ids to a specified maximum length.
-
-    Parameters:
-    - tokens (list of int): The token ids to be padded or truncated.
-    - max_length (int): The maximum length.
-
-    Returns:
-    - list of int: The adjusted list of token ids.
-    """
-    if len(tokens) > max_length:
-        return tokens[:max_length]
-    else:
-        return tokens + [0] * (max_length - len(tokens))
+# Example Usage:
+# vocab = Vocabulary(max_size=10000)
+# vocab.build_vocab([preprocess_text(sent) for sent in all_sentences])
+# numericalized_texts = [vocab.numericalize(preprocess_text(sent)) for sent in all_sentences]
+# padded_texts = pad_sequences(numericalized_texts, max_length=50)
