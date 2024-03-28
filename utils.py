@@ -1,17 +1,30 @@
-import re
 import torch
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 
+import re
+import nltk
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+
+# Download necessary NLTK datasets (only needs to be done once)
+nltk.download('stopwords')
+nltk.download('wordnet')
+nltk.download('omw-1.4')
+
+# Initialize the WordNet lemmatizer
+lemmatizer = WordNetLemmatizer()
+
+
 def preprocess_text(text):
     """
-    Cleans the text by removing URLs, HTML tags, mentions, hashtags, and special characters.
-    This function aims to standardize the text input for better model performance.
+    Cleans and preprocesses the text by removing URLs, HTML tags, mentions, hashtags, special characters,
+    and then applies lowercasing, stopword removal, and lemmatization.
 
     Parameters:
-    - text (str): The text to be cleaned.
+    - text (str): The text to be cleaned and processed.
 
     Returns:
-    - str: The cleaned text.
+    - str: The processed text.
     """
     # Remove URLs
     text = re.sub(r'https?://\S+|www\.\S+', '', text)
@@ -21,9 +34,25 @@ def preprocess_text(text):
     text = re.sub(r'@\w+|#\w+', '', text)
     # Remove special characters and numbers, keeping only letters
     text = re.sub(r'[^a-zA-Z\s]', '', text)
+    # Lowercase the text
+    text = text.lower()
     # Remove extra spaces
     text = re.sub(r'\s+', ' ', text).strip()
-    return text
+
+    # Tokenize the text
+    words = text.split()
+
+    # Remove stopwords
+    words = [word for word in words if word not in stopwords.words('english')]
+
+    # Lemmatize each word
+    lemmatized_words = [lemmatizer.lemmatize(word) for word in words]
+
+    # Reconstruct the text from processed words
+    processed_text = ' '.join(lemmatized_words)
+
+    return processed_text
+
 
 def compute_metrics(y_true, y_pred):
     """

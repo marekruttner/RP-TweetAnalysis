@@ -14,10 +14,10 @@ import wandb
 
 # Initialize wandb
 wandb.init(project="tweet-popularity-prediction", config={
-    "learning_rate": 0.001,
+    "learning_rate": 0.01,
     "architecture": "LSTM",
     "dataset": "dataset.csv",
-    "epochs": 10,
+    "epochs": 20,
     "vocab_size": 5000,
     "embedding_dim": 100,
     "hidden_dim": 256,
@@ -37,46 +37,15 @@ class TweetsDataset(Dataset):
     def __getitem__(self, idx):
         return self.texts[idx], self.scores[idx]
 
-"""
+
 class TweetPopularityModel(pl.LightningModule):
-    def __init__(self, vocab_size, embedding_dim, hidden_dim, learning_rate=0.001):
+    def __init__(self, input_dim, hidden_dim, learning_rate=0.001, num_layers=1):
         super().__init__()
         self.save_hyperparameters()
-        self.embedding = nn.Embedding(vocab_size, embedding_dim)
-        self.lstm = nn.LSTM(embedding_dim, hidden_dim, batch_first=True, bidirectional=True)
-        self.fc = nn.Linear(hidden_dim * 2, 1)
-
-    def forward(self, text):
-        embedded = self.embedding(text)
-        _, (hidden, _) = self.lstm(embedded)
-        output = self.fc(torch.cat((hidden[-2, :, :], hidden[-1, :, :]), dim=1))
-        return output
-
-    def configure_optimizers(self):
-        return optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
-
-    def training_step(self, batch, batch_idx):
-        texts, scores = batch
-        predictions = self.forward(texts).squeeze(1)
-        loss = nn.functional.mse_loss(predictions, scores)
-        self.log('train_loss', loss)
-        return loss
-
-    def validation_step(self, batch, batch_idx):
-        texts, scores = batch
-        predictions = self.forward(texts).squeeze(1)
-        loss = nn.functional.mse_loss(predictions, scores)
-        self.log('val_loss', loss, prog_bar=True)
-        return loss
-"""
-class TweetPopularityModel(pl.LightningModule):
-    def __init__(self, input_dim, hidden_dim, learning_rate=0.001):
-        super().__init__()
-        self.save_hyperparameters()
-        # LSTM layer
-        self.lstm = nn.LSTM(input_dim, hidden_dim, batch_first=True, bidirectional=True)
-        # Fully connected layer
-        self.fc = nn.Linear(hidden_dim * 2, 1)  # hidden_dim * 2 because of bidirectional
+        # Correcting the LSTM initialization with the right argument names
+        self.lstm = nn.LSTM(input_size=input_dim, hidden_size=hidden_dim, num_layers=num_layers, batch_first=True,
+                            bidirectional=True)
+        self.fc = nn.Linear(hidden_dim * 2, 1)  # Multiplied by 2 for bidirectional output
 
     def forward(self, x):
         # Pass the input through the LSTM layer
@@ -93,7 +62,6 @@ class TweetPopularityModel(pl.LightningModule):
         # But here we reshape to ensure compatibility and clear understanding
         output = self.fc(hidden.squeeze(0))
         return output
-
     def configure_optimizers(self):
         # Optimizer
         return optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
