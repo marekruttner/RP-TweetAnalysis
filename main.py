@@ -13,7 +13,7 @@ from utils import preprocess_text
 import wandb
 
 # Initialize wandb
-wandb.init(project="tweet-popularity-prediction", entity="your_wandb_username", config={
+wandb.init(project="tweet-popularity-prediction", config={
     "learning_rate": 0.001,
     "architecture": "LSTM",
     "dataset": "dataset.csv",
@@ -37,7 +37,7 @@ class TweetsDataset(Dataset):
     def __getitem__(self, idx):
         return self.texts[idx], self.scores[idx]
 
-
+"""
 class TweetPopularityModel(pl.LightningModule):
     def __init__(self, vocab_size, embedding_dim, hidden_dim, learning_rate=0.001):
         super().__init__()
@@ -68,12 +68,62 @@ class TweetPopularityModel(pl.LightningModule):
         loss = nn.functional.mse_loss(predictions, scores)
         self.log('val_loss', loss, prog_bar=True)
         return loss
+"""
+class TweetPopularityModel(pl.LightningModule):
+    def __init__(self, input_dim, hidden_dim, learning_rate=0.001):
+        super().__init__()
+        self.save_hyperparameters()
+        # LSTM layer
+        self.lstm = nn.LSTM(input_dim, hidden_dim, batch_first=True, bidirectional=True)
+        # Fully connected layer
+        self.fc = nn.Linear(hidden_dim * 2, 1)  # hidden_dim * 2 because of bidirectional
 
+    def forward(self, x):
+        # Pass the input through the LSTM layer
+        _, (hidden, _) = self.lstm(x)
+
+        # Handling for a bidirectional LSTM
+        # Reshape hidden state assuming single layer bidirectional LSTM
+        # hidden shape is [num_layers * num_directions, batch, hidden_size]
+        # We reshape it to [batch, num_layers * num_directions * hidden_size]
+        # For a single layer bidirectional LSTM, it becomes [batch, 2 * hidden_size]
+        hidden = hidden.view(1, -1, self.hparams.hidden_dim * 2)
+
+        # For a single layer, you might directly use hidden states
+        # But here we reshape to ensure compatibility and clear understanding
+        output = self.fc(hidden.squeeze(0))
+        return output
+
+    def configure_optimizers(self):
+        # Optimizer
+        return optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
+
+    def training_step(self, batch, batch_idx):
+        # Training step
+        texts, scores = batch
+        predictions = self.forward(texts).squeeze(1)
+        loss = nn.functional.mse_loss(predictions, scores)
+        self.log('train_loss', loss)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        # Validation step
+        texts, scores = batch
+        predictions = self.forward(texts).squeeze(1)
+        loss = nn.functional.mse_loss(predictions, scores)
+        self.log('val_loss', loss, prog_bar=True)
+        return loss
 
 if __name__ == "__main__":
+    # Load and preprocess your dataset
     df = pd.read_csv('dataset.csv')
     df['Content'] = df['Content'].apply(preprocess_text)
 
+    # Example calculation for 'Popularity_Score'
+    # Adjust this calculation based on your actual formula
+    df['Popularity_Score'] = df['Likes'] + df['Retweets']  # Example calculation
+
+    # Split data into training and validation sets
     X_train, X_val, y_train, y_val = train_test_split(df['Content'], df['Popularity_Score'], test_size=0.2,
                                                       random_state=42)
 
@@ -89,19 +139,19 @@ if __name__ == "__main__":
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=32)
 
-    model = TweetPopularityModel(config.vocab_size, config.embedding_dim, config.hidden_dim,
-                                 learning_rate=config.learning_rate)
+    model = TweetPopularityModel(input_dim=config.vocab_size, hidden_dim=config.hidden_dim, learning_rate=config.learning_rate)
 
 
-    wandb_logger = WandbLogger(project="tweet-popularity-prediction", entity="your_wandb_username", log_model="all")
+
+    wandb_logger = WandbLogger(project="tweet-popularity-prediction", log_model="all")
 
     trainer = pl.Trainer(
         max_epochs=config.epochs,
-        gpus=-1,
+        #gpus=1,
         callbacks=[ModelCheckpoint(monitor='val_loss')],
         logger=wandb_logger
     )
 
     trainer.fit(model, train_loader, val_loader)
 
-    wandb_logger.experiment.finish()
+    wandb.finish()
