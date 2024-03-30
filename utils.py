@@ -17,41 +17,25 @@ lemmatizer = WordNetLemmatizer()
 
 def preprocess_text(text):
     """
-    Cleans and preprocesses the text by removing URLs, HTML tags, mentions, hashtags, special characters,
-    and then applies lowercasing, stopword removal, and lemmatization.
+    Simplified text preprocessing for compatibility with Transformer-based models.
+    Cleans the text by removing URLs and HTML tags, but maintains casing, mentions, hashtags,
+    and special characters, as these can provide meaningful context for the model.
 
     Parameters:
-    - text (str): The text to be cleaned and processed.
+    - text (str): The text to be cleaned.
 
     Returns:
-    - str: The processed text.
+    - str: The cleaned text.
     """
     # Remove URLs
     text = re.sub(r'https?://\S+|www\.\S+', '', text)
     # Remove HTML tags
     text = re.sub(r'<.*?>', '', text)
-    # Remove mentions (@) and hashtags (#)
-    text = re.sub(r'@\w+|#\w+', '', text)
-    # Remove special characters and numbers, keeping only letters
-    text = re.sub(r'[^a-zA-Z\s]', '', text)
-    # Lowercase the text
-    text = text.lower()
-    # Remove extra spaces
+
+    # Remove extra spaces, but maintain original casing and structure
     text = re.sub(r'\s+', ' ', text).strip()
 
-    # Tokenize the text
-    words = text.split()
-
-    # Remove stopwords
-    words = [word for word in words if word not in stopwords.words('english')]
-
-    # Lemmatize each word
-    lemmatized_words = [lemmatizer.lemmatize(word) for word in words]
-
-    # Reconstruct the text from processed words
-    processed_text = ' '.join(lemmatized_words)
-
-    return processed_text
+    return text
 
 
 def compute_metrics(y_true, y_pred):

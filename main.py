@@ -1,125 +1,91 @@
 import torch
-from torch import nn, optim
 from torch.utils.data import DataLoader, Dataset
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from sklearn.feature_extraction.text import TfidfVectorizer
+from transformers import GPT2Model, GPT2Tokenizer, AdamW
 
-from utils import preprocess_text
+from utils import preprocess_text  # Adjust the preprocess_text function for minimal preprocessing
 
 import wandb
 
 # Initialize wandb
-wandb.init(project="tweet-popularity-prediction", config={
-    "learning_rate": 0.01,
-    "architecture": "LSTM",
-    "dataset": "dataset.csv",
+wandb.init(project="tweet-popularity-prediction")
+
+# Configuration
+config = {
+    "pretrained_model": "gpt2-medium",  # Example model, adjust based on your needs and resource availability
     "epochs": 20,
-    "vocab_size": 5000,
-    "embedding_dim": 100,
-    "hidden_dim": 256,
-})
-
-config = wandb.config
-
+}
 
 class TweetsDataset(Dataset):
-    def __init__(self, texts, scores):
-        self.texts = texts
+    def __init__(self, encodings, scores):
+        self.encodings = encodings
         self.scores = scores
 
     def __len__(self):
-        return len(self.texts)
+        return len(self.scores)
 
     def __getitem__(self, idx):
-        return self.texts[idx], self.scores[idx]
-
+        item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
+        item['labels'] = torch.tensor(self.scores[idx], dtype=torch.float)
+        return item
 
 class TweetPopularityModel(pl.LightningModule):
-    def __init__(self, input_dim, hidden_dim, learning_rate=0.001, num_layers=1):
+    def __init__(self, pretrained_model):
         super().__init__()
-        self.save_hyperparameters()
-        # Correcting the LSTM initialization with the right argument names
-        self.lstm = nn.LSTM(input_size=input_dim, hidden_size=hidden_dim, num_layers=num_layers, batch_first=True,
-                            bidirectional=True)
-        self.fc = nn.Linear(hidden_dim * 2, 1)  # Multiplied by 2 for bidirectional output
+        self.model = GPT2Model.from_pretrained(pretrained_model)
+        self.regressor = torch.nn.Linear(self.model.config.n_embd, 1)
 
-    def forward(self, x):
-        # Pass the input through the LSTM layer
-        _, (hidden, _) = self.lstm(x)
-
-        # Handling for a bidirectional LSTM
-        # Reshape hidden state assuming single layer bidirectional LSTM
-        # hidden shape is [num_layers * num_directions, batch, hidden_size]
-        # We reshape it to [batch, num_layers * num_directions * hidden_size]
-        # For a single layer bidirectional LSTM, it becomes [batch, 2 * hidden_size]
-        hidden = hidden.view(1, -1, self.hparams.hidden_dim * 2)
-
-        # For a single layer, you might directly use hidden states
-        # But here we reshape to ensure compatibility and clear understanding
-        output = self.fc(hidden.squeeze(0))
-        return output
-    def configure_optimizers(self):
-        # Optimizer
-        return optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
+    def forward(self, input_ids, attention_mask=None, labels=None):
+        output = self.model(input_ids, attention_mask=attention_mask)
+        logits = self.regressor(output.last_hidden_state[:, -1, :])
+        return logits
 
     def training_step(self, batch, batch_idx):
-        # Training step
-        texts, scores = batch
-        predictions = self.forward(texts).squeeze(1)
-        loss = nn.functional.mse_loss(predictions, scores)
+        labels = batch.pop('labels')
+        outputs = self.forward(**batch)
+        loss = torch.nn.functional.mse_loss(outputs.squeeze(-1), labels)
         self.log('train_loss', loss)
         return loss
 
-    def validation_step(self, batch, batch_idx):
-        # Validation step
-        texts, scores = batch
-        predictions = self.forward(texts).squeeze(1)
-        loss = nn.functional.mse_loss(predictions, scores)
-        self.log('val_loss', loss, prog_bar=True)
-        return loss
+    def configure_optimizers(self):
+        return AdamW(self.parameters(), lr=5e-5)
 
 if __name__ == "__main__":
-    # Load and preprocess your dataset
+    tokenizer = GPT2Tokenizer.from_pretrained(config['pretrained_model'])
+
+    # Set padding token to EOS token if it's not already set
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
     df = pd.read_csv('dataset.csv')
     df['Content'] = df['Content'].apply(preprocess_text)
 
-    # Example calculation for 'Popularity_Score'
-    # Adjust this calculation based on your actual formula
-    df['Popularity_Score'] = df['Likes'] + df['Retweets']  # Example calculation
+    df['Likes'] = pd.to_numeric(df['Likes'], errors='coerce')
+    df['Analytics'] = pd.to_numeric(df['Analytics'], errors='coerce')
+    df.fillna({'Likes': 0, 'Analytics': 1}, inplace=True)
 
-    # Split data into training and validation sets
-    X_train, X_val, y_train, y_val = train_test_split(df['Content'], df['Popularity_Score'], test_size=0.2,
-                                                      random_state=42)
+    df['Popularity_Score'] = df['Likes'] / df['Analytics']
 
-    vectorizer = TfidfVectorizer(max_features=config.vocab_size)
-    X_train = vectorizer.fit_transform(X_train).toarray()
-    X_val = vectorizer.transform(X_val).toarray()
+    X_train, X_val, y_train, y_val = train_test_split(df['Content'], df['Popularity_Score'], test_size=0.2, random_state=42)
 
-    train_dataset = TweetsDataset(torch.tensor(X_train, dtype=torch.float32),
-                                  torch.tensor(y_train.values, dtype=torch.float32))
-    val_dataset = TweetsDataset(torch.tensor(X_val, dtype=torch.float32),
-                                torch.tensor(y_val.values, dtype=torch.float32))
+    # Now that the tokenizer has a pad_token, padding should work
+    train_encodings = tokenizer(X_train.tolist(), truncation=True, padding=True)
+    val_encodings = tokenizer(X_val.tolist(), truncation=True, padding=True)
 
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=32)
+    train_dataset = TweetsDataset(train_encodings, y_train.tolist())
+    val_dataset = TweetsDataset(val_encodings, y_val.tolist())
 
-    model = TweetPopularityModel(input_dim=config.vocab_size, hidden_dim=config.hidden_dim, learning_rate=config.learning_rate)
+    train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=8)
 
+    model = TweetPopularityModel(pretrained_model=config['pretrained_model'])
 
-
-    wandb_logger = WandbLogger(project="tweet-popularity-prediction", log_model="all")
-
-    trainer = pl.Trainer(
-        max_epochs=config.epochs,
-        #gpus=1,
-        callbacks=[ModelCheckpoint(monitor='val_loss')],
-        logger=wandb_logger
-    )
-
+    trainer = pl.Trainer(max_epochs=config['epochs'], callbacks=[ModelCheckpoint(monitor='val_loss')])
     trainer.fit(model, train_loader, val_loader)
 
     wandb.finish()
+
