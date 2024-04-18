@@ -39,6 +39,7 @@ class TweetPopularityModel(pl.LightningModule):
         super().__init__()
         self.model = GPT2Model.from_pretrained(pretrained_model)
         self.regressor = torch.nn.Linear(self.model.config.n_embd, 1)
+        self.validation_losses = []  # To store validation losses for computing metrics later
 
     def forward(self, input_ids, attention_mask=None):
         outputs = self.model(input_ids, attention_mask=attention_mask)
@@ -56,13 +57,17 @@ class TweetPopularityModel(pl.LightningModule):
         labels = batch.pop('labels')
         outputs = self.forward(**batch)
         val_loss = torch.nn.functional.mse_loss(outputs.squeeze(-1), labels)
+        self.validation_losses.append(val_loss)
         self.log('val_loss', val_loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        return {'val_loss': val_loss}
+        return {'val_loss': val_loss, 'labels': labels, 'predictions': outputs}
 
-    def validation_epoch_end(self, outputs):
-        avg_val_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
+    def on_validation_epoch_end(self):
+        avg_val_loss = torch.stack(self.validation_losses).mean()
         self.log('avg_val_loss', avg_val_loss, on_epoch=True, prog_bar=True, logger=True)
-        self.log_dict(compute_metrics([x['labels'] for x in outputs], [self.forward(**x) for x in outputs]))
+        metrics = compute_metrics([x['labels'].cpu().numpy() for x in self.validation_losses],
+                                  [x['predictions'].detach().cpu().numpy() for x in self.validation_losses])
+        self.log_dict(metrics)
+        self.validation_losses = []  # Reset for the next epoch
 
     def configure_optimizers(self):
         return AdamW(self.parameters(), lr=config['learning_rate'])
