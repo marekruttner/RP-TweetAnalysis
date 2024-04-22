@@ -1,6 +1,7 @@
 import torch
 from torch.utils.data import DataLoader, Dataset
 import pytorch_lightning as pl
+from pytorch_lightning import Callback
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 import pandas as pd
@@ -20,6 +21,7 @@ config = {
     "epochs": 20,
 }
 
+
 class TweetsDataset(Dataset):
     def __init__(self, encodings, scores):
         self.encodings = encodings
@@ -32,6 +34,7 @@ class TweetsDataset(Dataset):
         item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
         item['labels'] = torch.tensor(self.scores[idx], dtype=torch.float)
         return item
+
 
 class TweetPopularityModel(pl.LightningModule):
     def __init__(self, pretrained_model):
@@ -49,10 +52,29 @@ class TweetPopularityModel(pl.LightningModule):
         outputs = self.forward(**batch)
         loss = torch.nn.functional.mse_loss(outputs.squeeze(-1), labels)
         self.log('train_loss', loss)
+        self.log('val_loss', loss, on_step=False, on_epoch=True)  # Log val_loss only on epoch end
         return loss
 
     def configure_optimizers(self):
         return AdamW(self.parameters(), lr=5e-5)
+
+class SaveBestModel(Callback):
+    def __init__(self, monitor="val_loss", save_top_k=1, mode="min"):
+        super().__init__()
+        self.monitor = monitor
+        self.save_top_k = save_top_k
+        self.mode = mode
+
+    def on_validation_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
+        """Saves the model with the best validation score."""
+        current_score = getattr(trainer.callback_metrics, self.monitor)
+        checkpoint = ModelCheckpoint(dirpath=trainer.checkpoint_dirpath,
+                                     filename="best_model.ckpt",
+                                     monitor=self.monitor,
+                                     save_top_k=self.save_top_k,
+                                     mode=self.mode)
+        checkpoint.on_validation_end(trainer, pl_module)  # Leverage ModelCheckpoint callback
+
 
 if __name__ == "__main__":
     tokenizer = GPT2Tokenizer.from_pretrained(config['pretrained_model'])
@@ -70,7 +92,8 @@ if __name__ == "__main__":
 
     df['Popularity_Score'] = df['Likes'] / df['Analytics']
 
-    X_train, X_val, y_train, y_val = train_test_split(df['Content'], df['Popularity_Score'], test_size=0.2, random_state=42)
+    X_train, X_val, y_train, y_val = train_test_split(df['Content'], df['Popularity_Score'], test_size=0.2,
+                                                      random_state=42)
 
     # Now that the tokenizer has a pad_token, padding should work
     train_encodings = tokenizer(X_train.tolist(), truncation=True, padding=True)
@@ -84,8 +107,8 @@ if __name__ == "__main__":
 
     model = TweetPopularityModel(pretrained_model=config['pretrained_model'])
 
-    trainer = pl.Trainer(max_epochs=config['epochs'], callbacks=[ModelCheckpoint(monitor='val_loss')])
+    trainer = pl.Trainer(max_epochs=config['epochs'], callbacks=[ModelCheckpoint(monitor='val_loss')],
+                         logger=WandbLogger(project="tweet-popularity-prediction"))
     trainer.fit(model, train_loader, val_loader)
 
     wandb.finish()
-
