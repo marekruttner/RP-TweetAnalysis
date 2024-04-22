@@ -55,6 +55,14 @@ class TweetPopularityModel(pl.LightningModule):
         self.log('val_loss', loss, on_step=False, on_epoch=True)  # Log val_loss only on epoch end
         return loss
 
+    def validation_step(self, batch, batch_idx):
+        # Similar to training_step, calculate loss on validation data
+        labels = batch.pop('labels')
+        outputs = self.forward(**batch)
+        loss = torch.nn.functional.mse_loss(outputs.squeeze(-1), labels)
+        self.log('val_loss', loss)
+        return loss
+
     def configure_optimizers(self):
         return AdamW(self.parameters(), lr=5e-5)
 
